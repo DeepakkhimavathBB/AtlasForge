@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: atlasforge
+    env: node
+    startCommand: npm install -g opencode-ai && node server.js
+    envVars:
+      - key: OPENCODE_API_KEY
+        sync: false
