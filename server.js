@@ -128,14 +128,20 @@ const opencodeBin = path.join(
   "node_modules", "opencode-ai", "bin", "opencode"
 );
 
+// ── Opencode path ─────────────────────────────────────────────────────────────
+
 function spawnOpencode(args) {
   const apiKey = process.env.OPENCODE_API_KEY;
   
+  // Detect OS: Use .cmd on Windows, or just the command on Linux/Render
+  const isWindows = process.platform === "win32";
+  const opencodeCmd = isWindows ? "opencode.cmd" : "opencode";
+
   console.log("🔍 Spawning OpenCode with args:", args);
   console.log("🔑 API Key present:", !!apiKey);
-  console.log("📦 OpenCode path:", opencodeBin);
   
-  return spawn(process.execPath, [opencodeBin, ...args], {
+  // We no longer use process.execPath with a hardcoded AppData path
+  return spawn(opencodeCmd, args, {
     cwd: os.homedir(),
     env: { 
       ...process.env, 
