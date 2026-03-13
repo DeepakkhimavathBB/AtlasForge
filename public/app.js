@@ -131,7 +131,13 @@ function setSidebarOpen(isOpen) {
   const shouldOpen = Boolean(isOpen);
   if (appShell) appShell.dataset.sidebarOpen = shouldOpen ? "true" : "false";
   sidebar.dataset.open = shouldOpen ? "true" : "false";
-  if (sidebarBackdrop) sidebarBackdrop.hidden = shouldOpen || window.innerWidth > 1120;
+  if (sidebarBackdrop) {
+    if (window.innerWidth > 1120) {
+      sidebarBackdrop.hidden = true;
+    } else {
+      sidebarBackdrop.hidden = !shouldOpen;
+    }
+  }
 }
 
 function renderSidebar() {
