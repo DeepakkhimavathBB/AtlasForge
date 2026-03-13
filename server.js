@@ -131,12 +131,16 @@ const opencodeBin = path.join(
 function spawnOpencode(args) {
   const apiKey = process.env.OPENCODE_API_KEY;
   
+  console.log("🔍 Spawning OpenCode with args:", args);
+  console.log("🔑 API Key present:", !!apiKey);
+  console.log("📦 OpenCode path:", opencodeBin);
+  
   return spawn(process.execPath, [opencodeBin, ...args], {
     cwd: os.homedir(),
     env: { 
       ...process.env, 
       NO_COLOR: "1",
-      OPENCODE_API_KEY: apiKey,  // Inject API key
+      OPENCODE_API_KEY: apiKey,
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -200,9 +204,10 @@ function streamOpencode({ message, threadId, requestId, response }) {
       for (const line of lines) processLine(line);
     });
 
-    // stderr is always the harmless "Failed to fetch models.dev" warning — ignore
-    child.stderr.on("data", () => {});
-
+// Log stderr for debugging
+child.stderr.on("data", (data) => {
+  console.error("❌ OpenCode stderr:", data.toString());
+});
     child.on("error", (err) => {
       activeRequests.delete(requestId);
       sseWrite(response, { type: "error", message: "Failed to spawn opencode: " + err.message });
@@ -367,8 +372,9 @@ function runOpencodeChat({ message, threadId, requestId }) {
     let stdoutBuf = "";
 
     child.stdout.on("data", (chunk) => { stdoutBuf += chunk.toString(); });
-    child.stderr.on("data", () => {});
-
+child.stderr.on("data", (data) => {
+  console.error("❌ OpenCode stderr:", data.toString());
+});
     child.on("error", (err) => {
       activeRequests.delete(requestId);
       reject(new Error("Failed to spawn opencode: " + err.message));
