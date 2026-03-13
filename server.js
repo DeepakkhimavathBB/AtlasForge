@@ -156,7 +156,7 @@ function spawnOpencode(args) {
 
 function streamOpencode({ message, threadId, requestId, response }) {
   return new Promise((resolve) => {
-  const args = ["run", "--format", "json", "--thinking", "--model", "bigpickle"];
+    const args = ["run", "--format", "json", "--thinking"];
     if (threadId) { args.push("--session", threadId); }
     args.push(message);
 
@@ -369,7 +369,7 @@ async function handleChat(request, response) {
 
 function runOpencodeChat({ message, threadId, requestId }) {
   return new Promise((resolve, reject) => {
-  const args = ["run", "--format", "json", "--thinking", "--model", "bigpickle"];
+    const args = ["run", "--format", "json", "--thinking"];
     if (threadId) { args.push("--session", threadId); }
     args.push(message);
 
