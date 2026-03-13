@@ -129,19 +129,24 @@ const opencodeBin = path.join(
 );
 
 function spawnOpencode(args) {
+  const apiKey = process.env.OPENCODE_API_KEY;
+  
   return spawn(process.execPath, [opencodeBin, ...args], {
     cwd: os.homedir(),
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { 
+      ...process.env, 
+      NO_COLOR: "1",
+      OPENCODE_API_KEY: apiKey,  // Inject API key
+    },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
 }
-
 // ── Streaming: opencode ───────────────────────────────────────────────────────
 
 function streamOpencode({ message, threadId, requestId, response }) {
   return new Promise((resolve) => {
-    const args = ["run", "--format", "json", "--thinking"];
+  const args = ["run", "--format", "json", "--thinking", "--model", "bigpickle"];
     if (threadId) { args.push("--session", threadId); }
     args.push(message);
 
@@ -353,7 +358,7 @@ async function handleChat(request, response) {
 
 function runOpencodeChat({ message, threadId, requestId }) {
   return new Promise((resolve, reject) => {
-    const args = ["run", "--format", "json", "--thinking"];
+  const args = ["run", "--format", "json", "--thinking", "--model", "bigpickle"];
     if (threadId) { args.push("--session", threadId); }
     args.push(message);
 
