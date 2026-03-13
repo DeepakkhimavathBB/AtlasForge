@@ -5,7 +5,7 @@ const os = require("os");
 const crypto = require("crypto");
 const { execFile, spawn } = require("child_process");
 
-const host = "127.0.0.1";
+const host = "0.0.0.0";
 const port = process.env.PORT || 3000;
 const publicDir = path.join(__dirname, "public");
 const bridgeScriptPath = path.join(__dirname, "scripts", "codex-bridge.ps1");
