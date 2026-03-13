@@ -1,0 +1,94 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AtlasForge Horizon</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    >
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="ambient ambient-a" aria-hidden="true"></div>
+    <div class="ambient ambient-b" aria-hidden="true"></div>
+
+    <main class="app-shell" data-sidebar-open="true">
+      <aside id="sidebar" class="history-panel" data-open="false" aria-label="Conversation history">
+        <div class="history-panel__head">
+          <div>
+            <p class="eyebrow">AtlasForge Horizon</p>
+            <h1>Conversations</h1>
+          </div>
+          <button id="historyClose" type="button" class="icon-button icon-button--ghost" aria-label="Close history">
+            <span></span>
+            <span></span>
+          </button>
+        </div>
+
+        <div class="history-panel__body">
+          <button id="reset" type="button" class="new-chat-button">+ New conversation</button>
+          <div id="conversationList" class="conversation-list"></div>
+        </div>
+      </aside>
+
+      <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div class="topbar__left">
+            <button id="historyToggle" type="button" class="icon-button" aria-label="Open history">
+              <span></span>
+              <span></span>
+              <span></span>
+            </button>
+          </div>
+
+          <div class="topbar__center">
+            <p id="conversationHeading" class="conversation-title-bar">New conversation</p>
+          </div>
+
+          <div class="topbar__right">
+            <div class="model-selector">
+              <label for="modelSelect" class="sr-only">Select Model</label>
+              <select id="modelSelect" class="model-select">
+                <option value="codex">Codex</option>
+                <option value="opencode">Opencode</option>
+              </select>
+            </div>
+            <div class="status-pill">
+              <span class="status-pill__dot"></span>
+              <p id="status">Ready</p>
+            </div>
+          </div>
+        </header>
+
+        <section class="chat-panel">
+          <div id="messages" class="messages" aria-live="polite"></div>
+
+          <form id="composer" class="composer">
+            <label class="sr-only" for="prompt">Message</label>
+            <div class="composer__frame">
+              <textarea
+                id="prompt"
+                name="prompt"
+                rows="3"
+                placeholder="Ask anything. The response will be organized for readability."
+              ></textarea>
+              <div class="composer__actions">
+                <p class="composer__hint">Press Enter to send. Shift + Enter for a new line.</p>
+                <button id="submit" type="submit" class="send-button">Send</button>
+              </div>
+            </div>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
+

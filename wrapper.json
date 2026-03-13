@@ -1,0 +1,24 @@
+[{
+    "specversion": "1.0",
+    "source": "/subscriptions/cde6da9f-793d-4feb-ba40-e1fe6f4c7c52/resourceGroups/Event-Architecture-rg/providers/Microsoft.Storage/storageAccounts/stgeventarchitecturedev",
+    "subject": "Enrichment",
+    "type": "Microsoft.Storage.BlobCreated",
+    "time": "2024-02-18T12:00:00Z",
+    "datacontenttype": "application/json",
+    "id": "81G8FE2FE-41DE-56DE-A519-BA3AFC2E5E5K",
+    "eventtype": "AghEnrichment",
+    "data": {      
+        "tenant_Guid":"8ae5c894-cbd6-403e-b922-0bd4c319e4b9",
+        "correlationid":"18962B04-CC4E-4EC1-9F6F-3EBE6C9EB2Dr",
+        "bloburl":"https://stgeventarchitecturedev.blob.core.windows.net/blob-payloads-dev/32b6fc05-710a-429e-8e22-c6d95962d1b6.json",
+        "api": "PutBlob",
+      "clientRequestId": "abcdef12-3456-7890-abcd-ef1234567890",
+      "requestId": "abc12345-6789-0123-4567-abcdef123456",
+      "eTag": "0x8D1234567890ABC",
+      "contentType": "application/json",
+      "contentLength": 342,
+      "url": "https://{storage-account}.blob.core.windows.net/{container-name}/{blob-name}",
+      "sequencer": "00000000000000000000000000000123456789"
+    }
+  }
+  ]
