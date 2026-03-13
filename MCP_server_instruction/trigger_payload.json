@@ -1,0 +1,15 @@
+{
+  "specversion": "1.0",
+  "source": "/subscriptions/00000000-0000-0000-0000-000000000000/storageAccounts/stgeventarchitecturedev",
+  "subject": "Enrichment",
+  "type": "Microsoft.Storage.BlobCreated",
+  "id": "Q8YjhRDfVIx1XOpM4b2UyrcvT5ZFHm",
+  "eventtype": "AghEnrichment",
+  "data": {
+    "tenant_Guid": "8ae5c894-cbd6-403e-b922-0bd4c319e4b9",
+    "correlationid": "QGygkqxhjXlE7WdBAzK1pcY3Zmno4i",
+    "bloburl": "https://stgeventarchitecturedev.blob.core.windows.net/blob-payloads-dev/32b6fc05-710a-429e-8e22-c6d95962d1b6.json",
+    "blobname": "32b6fc05-710a-429e-8e22-c6d95962d1b6.json",
+    "container": "blob-payloads-dev"
+  }
+}

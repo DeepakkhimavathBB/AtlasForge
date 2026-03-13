@@ -1,0 +1,9 @@
+{
+  "name": "atlasforge-chat-portal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local chat portal for a terminal-backed assistant workflow.",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
