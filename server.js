@@ -133,16 +133,14 @@ const opencodeBin = path.join(
 function spawnOpencode(args) {
   const apiKey = process.env.OPENCODE_API_KEY;
   
-  // Detect OS: Use .cmd on Windows, or just the command on Linux/Render
   const isWindows = process.platform === "win32";
   const opencodeCmd = isWindows ? "opencode.cmd" : "opencode";
 
   console.log("🔍 Spawning OpenCode with args:", args);
   console.log("🔑 API Key present:", !!apiKey);
   
-  // We no longer use process.execPath with a hardcoded AppData path
   return spawn(opencodeCmd, args, {
-    cwd: os.homedir(),
+    cwd: __dirname, // <--- CHANGED THIS from os.homedir()
     env: { 
       ...process.env, 
       NO_COLOR: "1",
@@ -199,7 +197,10 @@ function streamOpencode({ message, threadId, requestId, response }) {
       }
 
       if (ev.type === "error") {
-        sseWrite(response, { type: "error", message: ev.message || "Opencode error" });
+        console.error("❌ Opencode JSON Error:", ev);
+        // This grabs the REAL error reason instead of a generic fallback
+        const realError = ev.message || (ev.error && ev.error.message) || JSON.stringify(ev);
+        sseWrite(response, { type: "error", message: realError });
       }
     }
 
