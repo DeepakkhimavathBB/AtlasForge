@@ -1,12 +1,11 @@
 const http = require("http");
-const fs = require("fs");
+const fs   = require("fs");
 const path = require("path");
-const os = require("os");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const host = "0.0.0.0";
-const port = process.env.PORT || 10000;
+const host      = "0.0.0.0";
+const port      = process.env.PORT || 10000;
 const publicDir = path.join(__dirname, "public");
 const activeRequests = new Map();
 
@@ -18,86 +17,81 @@ const mimeTypes = {
 };
 
 // ── Logger ────────────────────────────────────────────────────────────────────
-// Every log line includes timestamp + live memory stats.
-// Watch heapUsedMB in Render logs — if it keeps climbing, that is the leak.
+// Every line shows timestamp + heap/rss — watch heapUsedMB for leaks in Render.
 
 function log(level, label, msg, extra) {
-  const ts  = new Date().toISOString();
-  const mem = process.memoryUsage();
-  const memStr = `heap=${(mem.heapUsed  / 1024 / 1024).toFixed(1)}MB` +
-                 ` rss=${(mem.rss       / 1024 / 1024).toFixed(1)}MB`;
-  const extraStr = extra !== undefined ? " | " + JSON.stringify(extra) : "";
-  const line = `[${ts}] [${level}] [${label}] ${msg}${extraStr} | ${memStr}`;
+  const ts     = new Date().toISOString();
+  const mem    = process.memoryUsage();
+  const memStr = `heap=${(mem.heapUsed / 1024 / 1024).toFixed(1)}MB rss=${(mem.rss / 1024 / 1024).toFixed(1)}MB`;
+  const ext    = extra !== undefined ? " | " + JSON.stringify(extra) : "";
+  const line   = `[${ts}] [${level}] [${label}] ${msg}${ext} | ${memStr}`;
   if (level === "ERROR") console.error(line);
   else                   console.log(line);
 }
 
-// Periodic memory report every 60s — lets you spot leaks over time in Render logs
+// Periodic memory report every 60s
 setInterval(() => {
-  const mem = process.memoryUsage();
+  const m = process.memoryUsage();
   log("INFO", "MEMORY", "Periodic check", {
-    heapUsedMB:  (mem.heapUsed  / 1024 / 1024).toFixed(1),
-    heapTotalMB: (mem.heapTotal / 1024 / 1024).toFixed(1),
-    rssMB:       (mem.rss       / 1024 / 1024).toFixed(1),
+    heapUsedMB:  (m.heapUsed  / 1024 / 1024).toFixed(1),
+    heapTotalMB: (m.heapTotal / 1024 / 1024).toFixed(1),
+    rssMB:       (m.rss       / 1024 / 1024).toFixed(1),
     activeReqs:  activeRequests.size,
   });
-}, 60_000).unref(); // .unref() so this timer never blocks process exit
+}, 60_000).unref();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function sendJson(response, statusCode, payload) {
-  response.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify(payload));
+function sendJson(res, status, payload) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(payload));
 }
 
-function sendNoContent(response) {
-  response.writeHead(204, {
+function sendNoContent(res) {
+  res.writeHead(204, {
     "Access-Control-Allow-Origin":  "*",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
   });
-  response.end();
+  res.end();
 }
 
-function serveFile(filePath, response) {
-  const ext = path.extname(filePath).toLowerCase();
+function serveFile(filePath, res) {
+  const ext         = path.extname(filePath).toLowerCase();
   const contentType = mimeTypes[ext] || "application/octet-stream";
-  fs.readFile(filePath, (err, contents) => {
+  fs.readFile(filePath, (err, data) => {
     if (err) {
-      log("ERROR", "STATIC", `File not found: ${filePath}`);
-      sendJson(response, 404, { error: "File not found" });
+      log("ERROR", "STATIC", `Not found: ${filePath}`);
+      sendJson(res, 404, { error: "File not found" });
       return;
     }
     log("INFO", "STATIC", `Served: ${filePath}`);
-    response.writeHead(200, { "Content-Type": contentType });
-    response.end(contents);
+    res.writeHead(200, { "Content-Type": contentType });
+    res.end(data);
   });
 }
 
-function collectBody(request) {
+function collectBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
-    request.on("data", (chunk) => {
+    req.on("data", (chunk) => {
       body += chunk;
       if (body.length > 1024 * 1024) {
-        log("ERROR", "BODY", "Request body too large — destroying connection");
+        log("ERROR", "BODY", "Request too large — destroying");
         reject(new Error("Request body too large"));
-        request.destroy();
+        req.destroy();
       }
     });
-    request.on("end",   () => resolve(body));
-    request.on("error", (err) => {
-      log("ERROR", "BODY", "Body read error: " + err.message);
-      reject(err);
-    });
+    req.on("end",   () => resolve(body));
+    req.on("error", (err) => { log("ERROR", "BODY", err.message); reject(err); });
   });
 }
 
-function sseWrite(response, data) {
-  response.write("data: " + JSON.stringify(data) + "\n\n");
+function sseWrite(res, data) {
+  res.write("data: " + JSON.stringify(data) + "\n\n");
 }
 
-// ── Server-side think parser ──────────────────────────────────────────────────
+// ── ThinkParser ───────────────────────────────────────────────────────────────
 
 class ServerThinkParser {
   constructor(onThinking, onReply) {
@@ -106,34 +100,26 @@ class ServerThinkParser {
     this.buf        = "";
     this.inThink    = false;
   }
-
-  push(chunk) {
-    this.buf += chunk;
-    this._flush();
-  }
-
+  push(chunk) { this.buf += chunk; this._flush(); }
   _flush() {
     const OPEN = "<think>", CLOSE = "</think>";
     while (this.buf.length > 0) {
       if (!this.inThink) {
-        const openIdx = this.buf.indexOf(OPEN);
-        if (openIdx === -1) {
+        const oi = this.buf.indexOf(OPEN);
+        if (oi === -1) {
           const partial = OPEN.split("").some((_, i) => this.buf.endsWith(OPEN.slice(0, i + 1)));
           if (partial) break;
-          this.onReply(this.buf);
-          this.buf = "";
-        } else if (openIdx > 0) {
-          this.onReply(this.buf.slice(0, openIdx));
-          this.buf = this.buf.slice(openIdx);
+          this.onReply(this.buf); this.buf = "";
+        } else if (oi > 0) {
+          this.onReply(this.buf.slice(0, oi)); this.buf = this.buf.slice(oi);
         } else {
-          this.inThink = true;
-          this.buf = this.buf.slice(OPEN.length);
+          this.inThink = true; this.buf = this.buf.slice(OPEN.length);
         }
       } else {
-        const closeIdx = this.buf.indexOf(CLOSE);
-        if (closeIdx !== -1) {
-          if (closeIdx > 0) this.onThinking(this.buf.slice(0, closeIdx));
-          this.buf = this.buf.slice(closeIdx + CLOSE.length).trimStart();
+        const ci = this.buf.indexOf(CLOSE);
+        if (ci !== -1) {
+          if (ci > 0) this.onThinking(this.buf.slice(0, ci));
+          this.buf = this.buf.slice(ci + CLOSE.length).trimStart();
           this.inThink = false;
         } else {
           const safe = Math.max(0, this.buf.length - (CLOSE.length - 1));
@@ -143,34 +129,27 @@ class ServerThinkParser {
       }
     }
   }
-
   flush() {
     if (!this.buf) return;
     if (this.inThink) this.onThinking(this.buf);
     else              this.onReply(this.buf);
     this.buf = "";
   }
-
-  // Free internal buffer — call after flush() when done
-  destroy() {
-    this.buf = "";
-  }
+  destroy() { this.buf = ""; }
 }
 
 // ── Opencode spawn ────────────────────────────────────────────────────────────
 
 function spawnOpencode(args) {
-  // opencode.cmd on Windows, opencode on Linux/Render
   const cmd = process.platform === "win32" ? "opencode.cmd" : "opencode";
-  log("INFO", "SPAWN", `cmd=${cmd} args=${args.join(" ")}`);
-
+  log("INFO", "SPAWN", `${cmd} ${args.join(" ")}`);
   return spawn(cmd, args, {
     cwd: __dirname,
     env: {
       ...process.env,
       NO_COLOR:             "1",
-      CI:                   "true",  // prevents interactive prompts
-      OPENCODE_INTERACTIVE: "false", // fully non-interactive
+      CI:                   "true",   // no interactive prompts
+      OPENCODE_INTERACTIVE: "false",  // fully headless
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -178,8 +157,8 @@ function spawnOpencode(args) {
 }
 
 // ── Streaming: opencode/big-pickle ────────────────────────────────────────────
-// Both "opencode" and "codex" model selections route here.
-// opencode/big-pickle = free, no auth needed, reasoning support.
+// Both "opencode" and "codex" selections route here.
+// opencode/big-pickle = free, no auth, reasoning support.
 
 function streamOpencode({ message, threadId, requestId, response }) {
   return new Promise((resolve) => {
@@ -191,13 +170,19 @@ function streamOpencode({ message, threadId, requestId, response }) {
 
     const child = spawnOpencode(args);
     activeRequests.set(requestId, child);
-    log("INFO", "STREAM", `Process spawned. Active requests: ${activeRequests.size}`, { requestId });
+    log("INFO", "STREAM", `Spawned. Active: ${activeRequests.size}`, { requestId });
 
-    let sessionId   = "";
-    let lineBuf     = "";
-    let doneSent    = false;
-    let replyCount  = 0;
-    let thinkCount  = 0;
+    // ✅ Kill after 90s if opencode hangs — prevents Render 502s
+    const killer = setTimeout(() => {
+      log("ERROR", "STREAM", "Timed out (120s) — killing process", { requestId });
+      try { child.kill("SIGKILL"); } catch {}
+    }, 120_000); // 2 min — free tier needs extra time on cold start
+
+    let sessionId  = "";
+    let lineBuf    = "";
+    let doneSent   = false;
+    let replyCount = 0;
+    let thinkCount = 0;
 
     const parser = new ServerThinkParser(
       (chunk) => { thinkCount++; sseWrite(response, { type: "thinking", text: chunk }); },
@@ -205,75 +190,64 @@ function streamOpencode({ message, threadId, requestId, response }) {
     );
 
     function processLine(line) {
-      const trimmed = line.trim();
-      if (!trimmed) return;
+      const t = line.trim();
+      if (!t) return;
       let ev;
-      try { ev = JSON.parse(trimmed); } catch { return; }
+      try { ev = JSON.parse(t); } catch { return; }
 
       if (!sessionId && ev.sessionID) {
         sessionId = String(ev.sessionID);
-        log("INFO", "STREAM", `Session assigned: ${sessionId}`, { requestId });
+        log("INFO", "STREAM", `Session: ${sessionId}`, { requestId });
       }
-
-      if (ev.type === "text" && ev.part && ev.part.text) {
-        parser.push(String(ev.part.text));
-      }
-
-      if (ev.type === "reasoning" && ev.part && ev.part.text) {
-        thinkCount++;
-        sseWrite(response, { type: "thinking", text: ev.part.text });
-      }
-
+      if (ev.type === "text"      && ev.part?.text) parser.push(String(ev.part.text));
+      if (ev.type === "reasoning" && ev.part?.text) { thinkCount++; sseWrite(response, { type: "thinking", text: ev.part.text }); }
       if (ev.type === "step_finish" && !doneSent) {
         parser.flush();
         doneSent = true;
-        const usage = (ev.part && ev.part.tokens) ? ev.part.tokens : null;
-        log("INFO", "STREAM", "Step finished", { requestId, sessionId, replyCount, thinkCount, usage });
+        const usage = ev.part?.tokens ?? null;
+        log("INFO", "STREAM", "Done", { requestId, sessionId, replyCount, thinkCount, usage });
         sseWrite(response, { type: "done", threadId: sessionId, usage });
       }
-
       if (ev.type === "error") {
-        const realError = ev.message || (ev.error && ev.error.message) || JSON.stringify(ev);
-        log("ERROR", "STREAM", `Opencode error event: ${realError}`, { requestId });
-        sseWrite(response, { type: "error", message: realError });
+        const msg = ev.message || ev.error?.message || JSON.stringify(ev);
+        log("ERROR", "STREAM", `Opencode error: ${msg}`, { requestId });
+        sseWrite(response, { type: "error", message: msg });
       }
     }
 
     child.stdout.on("data", (chunk) => {
       lineBuf += chunk.toString();
       const lines = lineBuf.split(/\r?\n/);
-      lineBuf = lines.pop(); // keep only incomplete tail — rest is processed immediately
+      lineBuf = lines.pop(); // keep incomplete tail only
       for (const line of lines) processLine(line);
     });
 
     child.stderr.on("data", (chunk) => {
-      // Truncate stderr to 300 chars max to avoid log flooding
       log("ERROR", "STREAM", `stderr: ${chunk.toString().slice(0, 300)}`, { requestId });
     });
 
     child.on("error", (err) => {
-      log("ERROR", "STREAM", `Spawn failed: ${err.message}`, { requestId });
+      clearTimeout(killer);
+      log("ERROR", "STREAM", `Spawn error: ${err.message}`, { requestId });
       activeRequests.delete(requestId);
-      log("INFO", "STREAM", `Active requests: ${activeRequests.size}`);
-      lineBuf = "";       // free line buffer
-      parser.destroy();   // free parser buffer
+      log("INFO", "STREAM", `Active: ${activeRequests.size}`);
+      lineBuf = ""; parser.destroy();
       sseWrite(response, { type: "error", message: "Failed to spawn opencode: " + err.message });
       resolve();
     });
 
     child.on("close", (code) => {
-      log("INFO", "STREAM", `Process closed (exit ${code})`, { requestId, sessionId });
+      clearTimeout(killer); // ✅ always clear timeout
+      log("INFO", "STREAM", `Closed (exit ${code})`, { requestId, sessionId });
       activeRequests.delete(requestId);
-      log("INFO", "STREAM", `Active requests: ${activeRequests.size}`);
-
+      log("INFO", "STREAM", `Active: ${activeRequests.size}`);
       if (lineBuf.trim()) processLine(lineBuf);
-      lineBuf = "";     // free line buffer
+      lineBuf = "";
       parser.flush();
-      parser.destroy(); // free parser buffer
-
+      parser.destroy();
       if (!doneSent) {
         doneSent = true;
-        log("INFO", "STREAM", "No step_finish received — sending done anyway", { requestId });
+        log("INFO", "STREAM", "No step_finish — sending done anyway", { requestId });
         sseWrite(response, { type: "done", threadId: sessionId, usage: null });
       }
       resolve();
@@ -281,47 +255,39 @@ function streamOpencode({ message, threadId, requestId, response }) {
   });
 }
 
-// "codex" kept for backwards compatibility — routes to opencode/big-pickle
-function streamCodex({ message, threadId, requestId, response }) {
-  log("INFO", "ROUTE", "codex → streamOpencode (opencode/big-pickle)", { requestId });
-  return streamOpencode({ message, threadId, requestId, response });
+// "codex" → opencode/big-pickle (backwards compat)
+function streamCodex(opts) {
+  log("INFO", "ROUTE", "codex → streamOpencode", { requestId: opts.requestId });
+  return streamOpencode(opts);
 }
 
-// ── Streaming endpoint: POST /api/chat/stream ─────────────────────────────────
+// ── Streaming endpoint ────────────────────────────────────────────────────────
 
-async function handleChatStream(request, response) {
+async function handleChatStream(req, res) {
   log("INFO", "HIT", "POST /api/chat/stream");
 
   let rawBody;
-  try { rawBody = await collectBody(request); }
-  catch (e) {
-    log("ERROR", "CHAT_STREAM", `collectBody failed: ${e.message}`);
-    sendJson(response, 400, { error: e.message });
-    return;
-  }
+  try { rawBody = await collectBody(req); }
+  catch (e) { log("ERROR", "CHAT_STREAM", e.message); sendJson(res, 400, { error: e.message }); return; }
 
   let payload;
   try { payload = JSON.parse(rawBody || "{}"); }
-  catch (e) {
-    log("ERROR", "CHAT_STREAM", "Invalid JSON body");
-    sendJson(response, 400, { error: "Invalid JSON body" });
-    return;
-  }
+  catch (e) { log("ERROR", "CHAT_STREAM", "Bad JSON"); sendJson(res, 400, { error: "Invalid JSON body" }); return; }
 
   const message   = String(payload.message   || "").trim();
   const threadId  = String(payload.threadId  || "").trim();
   const model     = String(payload.model     || "codex").trim();
   const requestId = String(payload.requestId || "").trim() || crypto.randomUUID();
 
-  log("INFO", "CHAT_STREAM", "Payload parsed", { requestId, model, threadId: threadId || "new", msgLen: message.length });
+  log("INFO", "CHAT_STREAM", "Parsed", { requestId, model, threadId: threadId || "new", msgLen: message.length });
 
   if (!message) {
-    log("ERROR", "CHAT_STREAM", "Empty message — rejected", { requestId });
-    sendJson(response, 400, { error: "Message is required." });
+    log("ERROR", "CHAT_STREAM", "Empty message", { requestId });
+    sendJson(res, 400, { error: "Message is required." });
     return;
   }
 
-  response.writeHead(200, {
+  res.writeHead(200, {
     "Content-Type":                "text/event-stream; charset=utf-8",
     "Cache-Control":               "no-cache",
     "Connection":                  "keep-alive",
@@ -329,68 +295,60 @@ async function handleChatStream(request, response) {
     "X-Accel-Buffering":           "no",
   });
 
-  // Kill child if client disconnects — prevents zombie processes leaking memory
-  request.on("close", () => {
+  // ✅ Kill child if client disconnects — no zombie processes
+  req.on("close", () => {
     const proc = activeRequests.get(requestId);
     if (proc) {
-      log("INFO", "CHAT_STREAM", "Client disconnected — killing child process", { requestId });
+      log("INFO", "CHAT_STREAM", "Client disconnected — killing child", { requestId });
       try { proc.kill(); } catch {}
       activeRequests.delete(requestId);
-      log("INFO", "CHAT_STREAM", `Active requests: ${activeRequests.size}`);
+      log("INFO", "CHAT_STREAM", `Active: ${activeRequests.size}`);
     }
   });
 
   try {
     if (model === "opencode") {
       log("INFO", "ROUTE", "→ streamOpencode", { requestId });
-      await streamOpencode({ message, threadId, requestId, response });
+      await streamOpencode({ message, threadId, requestId, response: res });
     } else {
       log("INFO", "ROUTE", "→ streamCodex (opencode/big-pickle)", { requestId });
-      await streamCodex({ message, threadId, requestId, response });
+      await streamCodex({ message, threadId, requestId, response: res });
     }
-  } catch (error) {
-    log("ERROR", "CHAT_STREAM", `Unhandled: ${error.message}`, { requestId });
-    sseWrite(response, { type: "error", message: error.message });
+  } catch (err) {
+    log("ERROR", "CHAT_STREAM", `Unhandled: ${err.message}`, { requestId });
+    sseWrite(res, { type: "error", message: err.message });
   }
 
-  log("INFO", "CHAT_STREAM", "Stream ended, closing response", { requestId });
-  response.end();
+  log("INFO", "CHAT_STREAM", "Stream ended", { requestId });
+  res.end();
 }
 
-// ── Non-streaming endpoint: POST /api/chat (legacy fallback) ──────────────────
+// ── Non-streaming endpoint (legacy) ──────────────────────────────────────────
 
-async function handleChat(request, response) {
+async function handleChat(req, res) {
   log("INFO", "HIT", "POST /api/chat (non-streaming)");
   try {
-    const rawBody = await collectBody(request);
-    const payload = JSON.parse(rawBody || "{}");
+    const rawBody   = await collectBody(req);
+    const payload   = JSON.parse(rawBody || "{}");
     const message   = String(payload.message   || "").trim();
     const threadId  = String(payload.threadId  || "").trim();
     const model     = String(payload.model     || "codex").trim();
     const requestId = String(payload.requestId || "").trim() || crypto.randomUUID();
 
-    log("INFO", "CHAT", "Payload parsed", { requestId, model, threadId: threadId || "new", msgLen: message.length });
+    log("INFO", "CHAT", "Parsed", { requestId, model, msgLen: message.length });
 
-    if (!message) {
-      log("ERROR", "CHAT", "Empty message — rejected", { requestId });
-      sendJson(response, 400, { error: "Message is required." });
-      return;
-    }
+    if (!message) { sendJson(res, 400, { error: "Message is required." }); return; }
 
     const result = model === "opencode"
       ? await runOpencodeChat({ message, threadId, requestId })
       : await runCodexChat({ message, threadId, requestId });
 
-    log("INFO", "CHAT", "Response ready", { requestId });
-    sendJson(response, 200, { ...result, requestId });
-  } catch (error) {
-    const statusCode = error.code === "REQUEST_CANCELLED" ? 499 : 500;
-    log("ERROR", "CHAT", `Error: ${error.message}`);
-    sendJson(response, statusCode, {
-      error:   "Unable to process the message.",
-      details: error.message,
-      code:    error.code || "REQUEST_FAILED",
-    });
+    log("INFO", "CHAT", "Done", { requestId });
+    sendJson(res, 200, { ...result, requestId });
+  } catch (err) {
+    const status = err.code === "REQUEST_CANCELLED" ? 499 : 500;
+    log("ERROR", "CHAT", err.message);
+    sendJson(res, status, { error: "Unable to process the message.", details: err.message, code: err.code || "REQUEST_FAILED" });
   }
 }
 
@@ -402,46 +360,42 @@ function runOpencodeChat({ message, threadId, requestId }) {
     if (threadId) { args.push("--session", threadId); }
     args.push(message);
 
-    log("INFO", "RUN", "Starting", { requestId, model: "opencode/big-pickle" });
+    log("INFO", "RUN", "Starting", { requestId });
 
     const child = spawnOpencode(args);
     activeRequests.set(requestId, child);
-    log("INFO", "RUN", `Active requests: ${activeRequests.size}`, { requestId });
+    log("INFO", "RUN", `Active: ${activeRequests.size}`, { requestId });
 
-    // Collect stdout as Buffer chunks — join once at end, avoids repeated string concat
-    const stdoutChunks = [];
+    // ✅ Kill after 90s if hanging
+    const killer = setTimeout(() => {
+      log("ERROR", "RUN", "Timed out (120s) — killing", { requestId });
+      try { child.kill("SIGKILL"); } catch {}
+    }, 120_000); // 2 min — free tier needs extra time on cold start
 
-    child.stdout.on("data", (chunk) => { stdoutChunks.push(chunk); });
-
-    child.stderr.on("data", (chunk) => {
-      log("ERROR", "RUN", `stderr: ${chunk.toString().slice(0, 300)}`, { requestId });
-    });
+    const chunks = [];
+    child.stdout.on("data", (c) => chunks.push(c));
+    child.stderr.on("data", (c) => log("ERROR", "RUN", `stderr: ${c.toString().slice(0, 300)}`, { requestId }));
 
     child.on("error", (err) => {
-      log("ERROR", "RUN", `Spawn failed: ${err.message}`, { requestId });
+      clearTimeout(killer);
       activeRequests.delete(requestId);
-      log("INFO", "RUN", `Active requests: ${activeRequests.size}`);
-      stdoutChunks.length = 0; // free memory
+      log("ERROR", "RUN", `Spawn error: ${err.message}`, { requestId });
+      chunks.length = 0;
       reject(new Error("Failed to spawn opencode: " + err.message));
     });
 
     child.on("close", (code) => {
-      log("INFO", "RUN", `Process closed (exit ${code})`, { requestId });
+      clearTimeout(killer);
       activeRequests.delete(requestId);
-      log("INFO", "RUN", `Active requests: ${activeRequests.size}`);
+      log("INFO", "RUN", `Closed (exit ${code})`, { requestId });
 
-      const stdoutBuf = Buffer.concat(stdoutChunks).toString(); // join once
-      stdoutChunks.length = 0; // free chunk array immediately
+      const raw = Buffer.concat(chunks).toString();
+      chunks.length = 0;
 
       try {
-        const result = parseOpencodeEvents(stdoutBuf);
-        if (result) {
-          log("INFO", "RUN", "Parse success", { requestId, sessionId: result.threadId });
-          resolve(result);
-        } else {
-          log("ERROR", "RUN", "No parseable reply", { requestId, preview: stdoutBuf.slice(0, 200) });
-          reject(new Error("Opencode returned no parseable reply. stdout: " + stdoutBuf.slice(0, 500)));
-        }
+        const result = parseOpencodeEvents(raw);
+        if (result) { log("INFO", "RUN", "Parse OK", { requestId }); resolve(result); }
+        else { log("ERROR", "RUN", "No parseable reply", { requestId }); reject(new Error("Opencode returned no reply. stdout: " + raw.slice(0, 500))); }
       } catch (e) {
         log("ERROR", "RUN", `Parse error: ${e.message}`, { requestId });
         reject(e);
@@ -453,14 +407,14 @@ function runOpencodeChat({ message, threadId, requestId }) {
 function parseOpencodeEvents(raw) {
   let reply = "", sessionId = "", usage = null, thinking = "";
   for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+    const t = line.trim();
+    if (!t) continue;
     let ev;
-    try { ev = JSON.parse(trimmed); } catch { continue; }
-    if (!sessionId && ev.sessionID)                               sessionId = String(ev.sessionID);
-    if (ev.type === "text"        && ev.part && ev.part.text)     reply    += String(ev.part.text);
-    if (ev.type === "reasoning"   && ev.part && ev.part.text)     thinking += String(ev.part.text);
-    if (ev.type === "step_finish" && ev.part && ev.part.tokens)   usage     = ev.part.tokens;
+    try { ev = JSON.parse(t); } catch { continue; }
+    if (!sessionId && ev.sessionID)                             sessionId = String(ev.sessionID);
+    if (ev.type === "text"        && ev.part?.text)             reply    += String(ev.part.text);
+    if (ev.type === "reasoning"   && ev.part?.text)             thinking += String(ev.part.text);
+    if (ev.type === "step_finish" && ev.part?.tokens)           usage     = ev.part.tokens;
     if (ev.type === "step_finish") return { threadId: sessionId, reply, usage, thinking };
     if (ev.type === "error") throw new Error(ev.message || "Opencode error event");
   }
@@ -468,99 +422,64 @@ function parseOpencodeEvents(raw) {
   return null;
 }
 
-// "codex" kept for backwards compatibility — routes to opencode/big-pickle
+// "codex" → opencode/big-pickle (backwards compat)
 function runCodexChat({ message, threadId, requestId }) {
-  log("INFO", "ROUTE", "codex → runOpencodeChat (opencode/big-pickle)", { requestId });
+  log("INFO", "ROUTE", "codex → runOpencodeChat", { requestId });
   return runOpencodeChat({ message, threadId, requestId });
 }
 
-// ── Cancel endpoint: POST /api/chat/cancel ────────────────────────────────────
+// ── Cancel endpoint ───────────────────────────────────────────────────────────
 
-function handleCancel(request, response) {
+function handleCancel(req, res) {
   log("INFO", "HIT", "POST /api/chat/cancel");
-  collectBody(request).then((rawBody) => {
-    const payload   = JSON.parse(rawBody || "{}");
-    const requestId = String(payload.requestId || "").trim();
-
-    if (!requestId) {
-      log("ERROR", "CANCEL", "Missing requestId");
-      sendJson(response, 400, { error: "requestId is required." });
-      return;
-    }
-
+  collectBody(req).then((raw) => {
+    const { requestId } = JSON.parse(raw || "{}");
+    if (!requestId) { sendJson(res, 400, { error: "requestId is required." }); return; }
     const proc = activeRequests.get(requestId);
-    if (!proc) {
-      log("INFO", "CANCEL", "Request not found (already done?)", { requestId });
-      sendJson(response, 404, { error: "Active request not found." });
-      return;
-    }
-
+    if (!proc)  { log("INFO", "CANCEL", "Not found", { requestId }); sendJson(res, 404, { error: "Not found." }); return; }
     try { proc.kill(); } catch {}
     activeRequests.delete(requestId);
-    log("INFO", "CANCEL", "Cancelled OK", { requestId, activeRequestsNow: activeRequests.size });
-    sendJson(response, 200, { ok: true, requestId });
-  }).catch((e) => {
-    log("ERROR", "CANCEL", `Error: ${e.message}`);
-    sendJson(response, 500, { error: e.message });
-  });
+    log("INFO", "CANCEL", "Cancelled", { requestId, active: activeRequests.size });
+    sendJson(res, 200, { ok: true, requestId });
+  }).catch((e) => { log("ERROR", "CANCEL", e.message); sendJson(res, 500, { error: e.message }); });
 }
 
-// ── Reset endpoint: DELETE /api/chat ─────────────────────────────────────────
+// ── Reset endpoint ────────────────────────────────────────────────────────────
 
-function handleReset(response) {
+function handleReset(res) {
   log("INFO", "HIT", "DELETE /api/chat (reset)");
-  sendJson(response, 200, { ok: true });
+  sendJson(res, 200, { ok: true });
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-const server = http.createServer(async (request, response) => {
-  const requestUrl = new URL(request.url, `http://${request.headers.host}`);
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
 
-  if (request.method === "OPTIONS") {
-    log("INFO", "ROUTER", `OPTIONS preflight: ${requestUrl.pathname}`);
-    sendNoContent(response);
+  if (req.method === "OPTIONS") { sendNoContent(res); return; }
+
+  if (req.method === "POST"   && url.pathname === "/api/chat/stream")  { await handleChatStream(req, res); return; }
+  if (req.method === "POST"   && url.pathname === "/api/chat")         { await handleChat(req, res);       return; }
+  if (req.method === "POST"   && url.pathname === "/api/chat/cancel")  { handleCancel(req, res);           return; }
+  if (req.method === "DELETE" && url.pathname === "/api/chat")         { handleReset(res);                 return; }
+
+  if (req.method !== "GET") {
+    log("INFO", "ROUTER", `405: ${req.method} ${url.pathname}`);
+    sendJson(res, 405, { error: "Method not allowed" });
     return;
   }
 
-  if (request.method === "POST" && requestUrl.pathname === "/api/chat/stream") {
-    await handleChatStream(request, response); return;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/chat") {
-    await handleChat(request, response); return;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/chat/cancel") {
-    handleCancel(request, response); return;
-  }
-
-  if (request.method === "DELETE" && requestUrl.pathname === "/api/chat") {
-    handleReset(response); return;
-  }
-
-  if (request.method !== "GET") {
-    log("INFO", "ROUTER", `405 Method Not Allowed: ${request.method} ${requestUrl.pathname}`);
-    sendJson(response, 405, { error: "Method not allowed" });
-    return;
-  }
-
-  // Static file serving
-  const pathname = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
+  const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
   const safePath = path.normalize(path.join(publicDir, pathname));
   if (!safePath.startsWith(publicDir)) {
-    log("ERROR", "STATIC", `Path traversal blocked: ${requestUrl.pathname}`);
-    sendJson(response, 403, { error: "Forbidden" });
+    log("ERROR", "STATIC", `Path traversal blocked: ${url.pathname}`);
+    sendJson(res, 403, { error: "Forbidden" });
     return;
   }
-
-  serveFile(safePath, response);
+  serveFile(safePath, res);
 });
 
-// Catch unexpected server-level errors
-server.on("error", (err) => {
-  log("ERROR", "SERVER", `Server error: ${err.message}`);
-});
+server.on("error", (err) => log("ERROR", "SERVER", err.message));
 
 server.listen(port, host, () => {
   log("INFO", "SERVER", `AtlasForge running at http://${host}:${port}`);
