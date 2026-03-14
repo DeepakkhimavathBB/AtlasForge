@@ -61,8 +61,7 @@ function sseWrite(response, data) {
 }
 
 // ── Server-side think parser ──────────────────────────────────────────────────
-// Splits opencode text output into <think>...</think> (thinking) vs reply chunks.
-// Handles multiple <think> blocks and partial tag boundaries across chunks.
+
 class ServerThinkParser {
   constructor(onThinking, onReply) {
     this.onThinking = onThinking;
@@ -82,17 +81,14 @@ class ServerThinkParser {
       if (!this.inThink) {
         const openIdx = this.buf.indexOf(OPEN);
         if (openIdx === -1) {
-          // No <think> tag — check if tail could be a partial opening tag
           const partial = OPEN.split("").some((_, i) => this.buf.endsWith(OPEN.slice(0, i + 1)));
-          if (partial) break; // wait for more data
+          if (partial) break;
           this.onReply(this.buf);
           this.buf = "";
         } else if (openIdx > 0) {
-          // Text before <think> is reply content
           this.onReply(this.buf.slice(0, openIdx));
           this.buf = this.buf.slice(openIdx);
         } else {
-          // buf starts with <think>
           this.inThink = true;
           this.buf = this.buf.slice(OPEN.length);
         }
@@ -102,9 +98,7 @@ class ServerThinkParser {
           if (closeIdx > 0) this.onThinking(this.buf.slice(0, closeIdx));
           this.buf = this.buf.slice(closeIdx + CLOSE.length).trimStart();
           this.inThink = false;
-          // Loop continues — handles multiple <think> blocks in one pass
         } else {
-          // Safe to emit everything except the last (CLOSE.length - 1) chars
           const safe = Math.max(0, this.buf.length - (CLOSE.length - 1));
           if (safe > 0) { this.onThinking(this.buf.slice(0, safe)); this.buf = this.buf.slice(safe); }
           break;
@@ -121,40 +115,31 @@ class ServerThinkParser {
   }
 }
 
-// ── Opencode path ─────────────────────────────────────────────────────────────
-
-const opencodeBin = path.join(
-  os.homedir(), "AppData", "Roaming", "npm",
-  "node_modules", "opencode-ai", "bin", "opencode"
-);
-
-// ── Opencode path ─────────────────────────────────────────────────────────────
+// ── Opencode spawn ────────────────────────────────────────────────────────────
 
 function spawnOpencode(args) {
-  const apiKey = process.env.OPENCODE_API_KEY;
-  
-  const isWindows = process.platform === "win32";
-  const opencodeCmd = isWindows ? "opencode.cmd" : "opencode";
+  // Works on both Windows (opencode.cmd) and Linux/Render (opencode)
+  const cmd = process.platform === "win32" ? "opencode.cmd" : "opencode";
 
-  console.log("🔍 Spawning OpenCode with args:", args);
-  console.log("🔑 API Key present:", !!apiKey);
-  
-  return spawn(opencodeCmd, args, {
-    cwd: __dirname, // <--- CHANGED THIS from os.homedir()
-    env: { 
-      ...process.env, 
+  return spawn(cmd, args, {
+    cwd: __dirname,
+    env: {
+      ...process.env,
       NO_COLOR: "1",
-      OPENCODE_API_KEY: apiKey,
+      CI: "true",                    // prevents interactive prompts
+      OPENCODE_INTERACTIVE: "false", // fully non-interactive mode
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
 }
+
 // ── Streaming: opencode ───────────────────────────────────────────────────────
 
 function streamOpencode({ message, threadId, requestId, response }) {
   return new Promise((resolve) => {
-    const args = ["run", "--format", "json", "--thinking"];
+    // ✅ FIXED: correct free model name is "opencode/big-pickle" not "zen/bigpickle"
+    const args = ["run", "--format", "json", "--thinking", "--model", "opencode/big-pickle"];
     if (threadId) { args.push("--session", threadId); }
     args.push(message);
 
@@ -197,9 +182,8 @@ function streamOpencode({ message, threadId, requestId, response }) {
       }
 
       if (ev.type === "error") {
-        console.error("❌ Opencode JSON Error:", ev);
-        // This grabs the REAL error reason instead of a generic fallback
         const realError = ev.message || (ev.error && ev.error.message) || JSON.stringify(ev);
+        console.error("Opencode error event:", realError);
         sseWrite(response, { type: "error", message: realError });
       }
     }
@@ -207,14 +191,14 @@ function streamOpencode({ message, threadId, requestId, response }) {
     child.stdout.on("data", (chunk) => {
       lineBuf += chunk.toString();
       const lines = lineBuf.split(/\r?\n/);
-      lineBuf = lines.pop(); // keep incomplete tail
+      lineBuf = lines.pop();
       for (const line of lines) processLine(line);
     });
 
-// Log stderr for debugging
-child.stderr.on("data", (data) => {
-  console.error("❌ OpenCode stderr:", data.toString());
-});
+    child.stderr.on("data", (chunk) => {
+      console.error("Opencode stderr:", chunk.toString());
+    });
+
     child.on("error", (err) => {
       activeRequests.delete(requestId);
       sseWrite(response, { type: "error", message: "Failed to spawn opencode: " + err.message });
@@ -223,11 +207,8 @@ child.stderr.on("data", (data) => {
 
     child.on("close", () => {
       activeRequests.delete(requestId);
-      // Flush any partial line left in buffer
       if (lineBuf.trim()) processLine(lineBuf);
-      // Flush parser in case step_finish never arrived
       parser.flush();
-      // Send done if step_finish event never came
       if (!doneSent) {
         doneSent = true;
         sseWrite(response, { type: "done", threadId: sessionId, usage: null });
@@ -319,7 +300,6 @@ async function handleChatStream(request, response) {
     "X-Accel-Buffering":           "no",
   });
 
-  // Kill child process if client disconnects mid-stream
   request.on("close", () => {
     const proc = activeRequests.get(requestId);
     if (proc) { try { proc.kill(); } catch {} activeRequests.delete(requestId); }
@@ -370,7 +350,8 @@ async function handleChat(request, response) {
 
 function runOpencodeChat({ message, threadId, requestId }) {
   return new Promise((resolve, reject) => {
-    const args = ["run", "--format", "json", "--thinking"];
+    // ✅ FIXED: correct free model name
+    const args = ["run", "--format", "json", "--thinking", "--model", "opencode/big-pickle"];
     if (threadId) { args.push("--session", threadId); }
     args.push(message);
 
@@ -379,9 +360,8 @@ function runOpencodeChat({ message, threadId, requestId }) {
     let stdoutBuf = "";
 
     child.stdout.on("data", (chunk) => { stdoutBuf += chunk.toString(); });
-child.stderr.on("data", (data) => {
-  console.error("❌ OpenCode stderr:", data.toString());
-});
+    child.stderr.on("data", (chunk) => { console.error("Opencode stderr:", chunk.toString()); });
+
     child.on("error", (err) => {
       activeRequests.delete(requestId);
       reject(new Error("Failed to spawn opencode: " + err.message));
@@ -403,10 +383,10 @@ function parseOpencodeEvents(raw) {
     if (!trimmed) continue;
     let ev;
     try { ev = JSON.parse(trimmed); } catch { continue; }
-    if (!sessionId && ev.sessionID) sessionId = String(ev.sessionID);
-    if (ev.type === "text"        && ev.part && ev.part.text)   reply += String(ev.part.text);
-    if (ev.type === "reasoning"   && ev.part && ev.part.text)   thinking += String(ev.part.text);
-    if (ev.type === "step_finish" && ev.part && ev.part.tokens) usage = ev.part.tokens;
+    if (!sessionId && ev.sessionID)                             sessionId = String(ev.sessionID);
+    if (ev.type === "text"      && ev.part && ev.part.text)     reply    += String(ev.part.text);
+    if (ev.type === "reasoning" && ev.part && ev.part.text)     thinking += String(ev.part.text);
+    if (ev.type === "step_finish" && ev.part && ev.part.tokens) usage     = ev.part.tokens;
     if (ev.type === "step_finish") return { threadId: sessionId, reply, usage, thinking };
     if (ev.type === "error") throw new Error(ev.message || "Opencode error event");
   }
